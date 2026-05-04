@@ -1,12 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 const FILE = path.join(process.cwd(), 'data', 'vendors.json');
 
 interface Vendor {
-  id: string; phone: string; ownerName: string; shopName: string;
-  shopId: string; isActive: boolean; createdAt: string; lastLogin: string;
+  id: string;
+  phone: string;
+  ownerName: string;
+  shopName: string;
+  shopId: string;
+  loginToken?: string;
+  isActive: boolean;
+  createdAt: string;
+  lastLogin: string;
+}
+
+/** Generate a vendor login token: SWQ-XXXX-XXXX-XXXX (12 alphanum chars). */
+export function generateVendorToken(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // omit I, O, 0, 1 for readability
+  const block = (n: number) => {
+    const bytes = crypto.randomBytes(n);
+    return Array.from(bytes, b => alphabet[b % alphabet.length]).join('');
+  };
+  return `SWQ-${block(4)}-${block(4)}-${block(4)}`;
 }
 
 export async function GET() {
@@ -33,6 +51,7 @@ export async function POST(req: NextRequest) {
     ownerName: body.ownerName,
     shopName: body.shopName,
     shopId: `swiq-${String(vendors.length + 1).padStart(3, '0')}`,
+    loginToken: generateVendorToken(),
     isActive: true,
     createdAt: new Date().toISOString(),
     lastLogin: new Date().toISOString(),

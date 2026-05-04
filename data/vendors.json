@@ -5,9 +5,10 @@
     "ownerName": "Raj Kumar",
     "shopName": "Raj's Kitchen",
     "shopId": "swiq-001",
+    "loginToken": "SWQ-RAJK-2026-9876",
     "isActive": true,
     "createdAt": "2026-01-15T08:30:00.000Z",
-    "lastLogin": "2026-05-04T00:51:17.154Z"
+    "lastLogin": "2026-05-04T21:04:13.009Z"
   },
   {
     "id": "v2",
@@ -15,6 +16,7 @@
     "ownerName": "Priya Sharma",
     "shopName": "Priya's Tiffin",
     "shopId": "swiq-002",
+    "loginToken": "SWQ-PRIY-2026-9123",
     "isActive": true,
     "createdAt": "2026-02-20T10:15:00.000Z",
     "lastLogin": "2026-05-03T18:45:00.000Z"
@@ -25,6 +27,7 @@
     "ownerName": "Aman Singh",
     "shopName": "Aman's Snack Corner",
     "shopId": "swiq-003",
+    "loginToken": "SWQ-AMAN-2026-9988",
     "isActive": false,
     "createdAt": "2026-03-10T14:20:00.000Z",
     "lastLogin": "2026-04-15T09:30:00.000Z"

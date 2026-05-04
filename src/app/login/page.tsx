@@ -1,29 +1,29 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Phone, KeyRound, Zap, ArrowRight } from 'lucide-react';
+import { Phone, KeyRound, Zap, ArrowRight, ShieldCheck } from 'lucide-react';
 
 const GREEN = '#16a34a';
 const DARK  = '#0f2817';
 
 export default function VendorLogin() {
   const router = useRouter();
-  const [step,    setStep]    = useState<'phone' | 'otp'>('phone');
+  const [step,    setStep]    = useState<'phone' | 'token'>('phone');
   const [phone,   setPhone]   = useState('');
-  const [otp,     setOtp]     = useState('');
+  const [token,   setToken]   = useState('');
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
 
-  const sendOtp = () => {
+  const proceed = () => {
     if (phone.length < 10) { setError('Enter a valid 10-digit phone'); return; }
-    setError(''); setStep('otp');
+    setError(''); setStep('token');
   };
 
   const verify = async () => {
     setLoading(true); setError('');
     const res = await fetch('/api/auth/login', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone, otp }),
+      body: JSON.stringify({ phone, token: token.trim() }),
     });
     const data = await res.json();
     setLoading(false);
@@ -59,39 +59,42 @@ export default function VendorLogin() {
                 value={phone} onChange={e => setPhone(e.target.value.replace(/\D/g, ''))}
                 placeholder="9876543210"
                 style={{ width: '100%', padding: '13px 14px 13px 40px', borderRadius: 10, border: '1px solid #d1fae5', fontSize: 14, color: DARK, outline: 'none', boxSizing: 'border-box' }}
-                onKeyDown={e => e.key === 'Enter' && sendOtp()}
+                onKeyDown={e => e.key === 'Enter' && proceed()}
               />
             </div>
 
             {error && <div style={{ background: '#fee2e2', color: '#b91c1c', padding: '10px 14px', borderRadius: 8, fontSize: 12, marginBottom: 14 }}>{error}</div>}
 
-            <button onClick={sendOtp} style={{ width: '100%', padding: '13px', borderRadius: 11, background: GREEN, color: '#fff', fontWeight: 800, fontSize: 14, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 4px 14px rgba(22,163,74,0.35)' }}>
-              Send OTP <ArrowRight size={15} />
+            <button onClick={proceed} style={{ width: '100%', padding: '13px', borderRadius: 11, background: GREEN, color: '#fff', fontWeight: 800, fontSize: 14, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 4px 14px rgba(22,163,74,0.35)' }}>
+              Continue <ArrowRight size={15} />
             </button>
           </>
         ) : (
           <>
             <div style={{ background: '#f0fdf4', border: '1px solid #d1fae5', borderRadius: 8, padding: '10px 14px', marginBottom: 18, fontSize: 12, color: '#374151' }}>
-              OTP sent to <strong style={{ color: DARK }}>+91 {phone}</strong>
-              <button onClick={() => { setStep('phone'); setOtp(''); setError(''); }} style={{ marginLeft: 8, background: 'none', border: 'none', color: GREEN, fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>Change</button>
+              Logging in as <strong style={{ color: DARK }}>+91 {phone}</strong>
+              <button onClick={() => { setStep('phone'); setToken(''); setError(''); }} style={{ marginLeft: 8, background: 'none', border: 'none', color: GREEN, fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>Change</button>
             </div>
 
-            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Enter OTP</label>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6 }}>Vendor Token</label>
             <div style={{ position: 'relative', marginBottom: 8 }}>
               <KeyRound size={15} color="#9ca3af" style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)' }} />
               <input
-                type="text" inputMode="numeric" maxLength={4} autoFocus
-                value={otp} onChange={e => setOtp(e.target.value.replace(/\D/g, ''))}
-                placeholder="••••"
-                style={{ width: '100%', padding: '13px 14px 13px 40px', borderRadius: 10, border: '1px solid #d1fae5', fontSize: 18, fontWeight: 700, letterSpacing: 4, color: DARK, outline: 'none', boxSizing: 'border-box', textAlign: 'center' }}
+                type="text" autoFocus autoCapitalize="characters"
+                value={token} onChange={e => setToken(e.target.value.toUpperCase())}
+                placeholder="SWQ-XXXX-XXXX-XXXX"
+                style={{ width: '100%', padding: '13px 14px 13px 40px', borderRadius: 10, border: '1px solid #d1fae5', fontSize: 14, fontFamily: 'monospace', fontWeight: 700, letterSpacing: 1, color: DARK, outline: 'none', boxSizing: 'border-box' }}
                 onKeyDown={e => e.key === 'Enter' && verify()}
               />
             </div>
-            <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 16 }}>Demo OTP: <strong style={{ color: GREEN }}>1234</strong></div>
+            <div style={{ fontSize: 11, color: '#9ca3af', marginBottom: 16, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <ShieldCheck size={11} color={GREEN} />
+              The token assigned to your shop by Swiq admin.
+            </div>
 
             {error && <div style={{ background: '#fee2e2', color: '#b91c1c', padding: '10px 14px', borderRadius: 8, fontSize: 12, marginBottom: 14 }}>{error}</div>}
 
-            <button onClick={verify} disabled={loading || otp.length < 4} style={{ width: '100%', padding: '13px', borderRadius: 11, background: loading || otp.length < 4 ? '#86efac' : GREEN, color: '#fff', fontWeight: 800, fontSize: 14, border: 'none', cursor: loading || otp.length < 4 ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+            <button onClick={verify} disabled={loading || token.trim().length < 8} style={{ width: '100%', padding: '13px', borderRadius: 11, background: loading || token.trim().length < 8 ? '#86efac' : GREEN, color: '#fff', fontWeight: 800, fontSize: 14, border: 'none', cursor: loading || token.trim().length < 8 ? 'wait' : 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
               {loading ? 'Verifying…' : 'Login as Vendor'}
             </button>
           </>

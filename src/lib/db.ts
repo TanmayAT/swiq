@@ -28,6 +28,22 @@ export const db = {
       if (idx !== -1) all[idx] = { ...all[idx], ...patch };
       write('orders.json', all);
     },
+    findById: (id: string): Order | undefined => {
+      return read<Order>('orders.json').find(o => o.id === id);
+    },
+    findByPlatformBillID: (platformBillID: string): Order | undefined => {
+      return read<Order>('orders.json').find(o => o.payment?.platformBillID === platformBillID);
+    },
+    /** Atomic-ish patch: read → mutate → write. Caller's mutator returns the new order. */
+    mutate: (id: string, mutator: (o: Order) => Order): Order | null => {
+      const all = read<Order>('orders.json');
+      const idx = all.findIndex(o => o.id === id);
+      if (idx === -1) return null;
+      const updated = mutator(all[idx]);
+      all[idx] = updated;
+      write('orders.json', all);
+      return updated;
+    },
   },
   customers: {
     getAll: () => read<Customer>('customers.json'),

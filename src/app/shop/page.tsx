@@ -1,7 +1,11 @@
 'use client';
 import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
-import { ShoppingCart, Plus, Minus, X, ChevronUp, MapPin, Clock, Star, Phone, Zap, CheckCircle2, Search, Receipt, Wallet, Banknote, Smartphone, Copy, ChevronLeft } from 'lucide-react';
+import {
+  ShoppingCart, Plus, Minus, X, ChevronUp, MapPin, Clock, Star, Phone, Zap,
+  CheckCircle2, Search, Receipt, Wallet, Banknote, Smartphone, Copy, ChevronLeft,
+  ShieldCheck, ArrowRight,
+} from 'lucide-react';
 
 interface MenuItem { id: string; name: string; price: number; category: string; description: string; available: boolean; popular: boolean; }
 interface Shop { name: string; tagline: string; phone: string; address: string; hours: string; isOpen: boolean; upiId: string; minOrder: number; deliveryTime: string; category: string; rating: string; totalRatings: number; }
@@ -11,6 +15,48 @@ type Screen = 'menu' | 'cart' | 'checkout' | 'payment' | 'success';
 
 const GREEN = '#16a34a';
 const DARK  = '#0f2817';
+
+const STEPS: { key: Screen; label: string }[] = [
+  { key: 'cart',     label: 'Cart' },
+  { key: 'checkout', label: 'Details' },
+  { key: 'payment',  label: 'Pay' },
+];
+
+function StepBar({ current }: { current: Screen }) {
+  const idx = STEPS.findIndex(s => s.key === current);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '12px 18px 0' }}>
+      {STEPS.map((s, i) => {
+        const done   = i < idx;
+        const active = i === idx;
+        return (
+          <div key={s.key} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{
+              width: 22, height: 22, borderRadius: '50%',
+              background: done ? GREEN : active ? '#fff' : '#f3f4f6',
+              border: `2px solid ${done || active ? GREEN : '#e5e7eb'}`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              flexShrink: 0,
+              boxShadow: active ? '0 0 0 4px rgba(22,163,74,0.15)' : 'none',
+            }}>
+              {done
+                ? <CheckCircle2 size={12} color="#fff" />
+                : <span style={{ fontSize: 10, fontWeight: 800, color: active ? GREEN : '#9ca3af' }}>{i + 1}</span>}
+            </div>
+            <span style={{
+              fontSize: 11, fontWeight: 700,
+              color: done || active ? DARK : '#9ca3af',
+              whiteSpace: 'nowrap',
+            }}>{s.label}</span>
+            {i < STEPS.length - 1 && (
+              <div style={{ flex: 1, height: 2, background: done ? GREEN : '#e5e7eb', borderRadius: 2 }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function ShopPage() {
   const [shop,      setShop]      = useState<Shop | null>(null);
@@ -26,7 +72,9 @@ export default function ShopPage() {
   const [orderId,   setOrderId]   = useState('');
   const [orderTotal, setOrderTotal] = useState(0);
   const [copied,    setCopied]    = useState(false);
-  const [payState,  setPayState]  = useState<'pending' | 'paid'>('pending');
+  const [payState,  setPayState]  = useState<'pending' | 'paid' | 'failed' | 'expired'>('pending');
+  const [paymentLink, setPaymentLink] = useState<{ upiLink: string; platformBillID: string; expiresAt: string } | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
   const catRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -76,10 +124,11 @@ export default function ShopPage() {
   /* Popular first within each category */
   const sortedFiltered = [...filtered].sort((a, b) => (b.popular ? 1 : 0) - (a.popular ? 1 : 0));
 
-  /* ── checkout: create order, then go to payment screen ── */
+  /* ── checkout: create order, initiate Setu payment, then go to payment screen ── */
   const placeOrder = async (paymentMethod: 'upi' | 'cash') => {
     if (!name.trim() || !phone.trim()) return;
     setPlacing(true);
+    setLinkError(null);
     const orderItems = cart.map(c => ({ name: c.name, qty: c.qty, price: c.price }));
     const res = await fetch('/api/orders', {
       method: 'POST',
@@ -95,59 +144,83 @@ export default function ShopPage() {
       }),
     });
     const data = await res.json();
-    setPlacing(false);
-    setOrderId(data.id || `ORD-${Date.now()}`);
+    const newOrderId = data.id || `ORD-${Date.now()}`;
+    setOrderId(newOrderId);
     setOrderTotal(total);
     if (typeof window !== 'undefined') {
       localStorage.setItem('swiq_customer', JSON.stringify({ phone: phone.trim(), name: name.trim() }));
     }
+
+    if (paymentMethod === 'upi') {
+      // Ask the backend (Setu in live mode, mock in dev) for the UPI link.
+      // The client never builds the link itself — gateway is the source of truth.
+      try {
+        const initRes = await fetch('/api/payments/upi/initiate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: newOrderId }),
+        });
+        const initData = await initRes.json();
+        if (!initRes.ok) throw new Error(initData.error || 'Could not initiate payment');
+        setPaymentLink({
+          upiLink: initData.upiLink,
+          platformBillID: initData.platformBillID,
+          expiresAt: initData.expiresAt,
+        });
+      } catch (err) {
+        setLinkError(err instanceof Error ? err.message : 'Payment init failed');
+      }
+    }
+
+    setPlacing(false);
     clearCart();
     setPayState('pending');
     setScreen(paymentMethod === 'upi' ? 'payment' : 'success');
   };
 
-  /* Poll for server-side payment confirmation while on the payment screen.
-     Today the vendor's "Mark Paid" button flips paymentStatus; later a real
-     UPI gateway webhook (Setu / Razorpay) will hit the same endpoint. */
+  /* Poll the dedicated payment status endpoint. That endpoint's job is:
+     1. Read our local state (set by Setu webhook when it fires).
+     2. If still INITIATED, hit Setu's status API as a fallback (handles
+        webhook delays). The client never has authority to flip state. */
   useEffect(() => {
     if (screen !== 'payment' || !orderId) return;
     let stopped = false;
     const tick = async () => {
       try {
-        const r = await fetch(`/api/orders?phone=${encodeURIComponent(phone.trim())}`);
-        const list: { id: string; paymentStatus?: 'pending' | 'paid' }[] = await r.json();
-        const me = list.find(o => o.id === orderId);
-        if (!stopped && me?.paymentStatus === 'paid') {
+        const r = await fetch(`/api/payments/status?orderId=${encodeURIComponent(orderId)}`);
+        const data: { paymentState?: string } = await r.json();
+        if (stopped) return;
+        if (data.paymentState === 'PAID' || data.paymentState === 'SETTLED') {
           setPayState('paid');
-          setTimeout(() => { if (!stopped) setScreen('success'); }, 1800);
+          setTimeout(() => { if (!stopped) setScreen('success'); }, 1600);
+        } else if (data.paymentState === 'FAILED') {
+          setPayState('failed');
+        } else if (data.paymentState === 'EXPIRED') {
+          setPayState('expired');
         }
       } catch {}
     };
     tick();
     const t = setInterval(tick, 3000);
     return () => { stopped = true; clearInterval(t); };
-  }, [screen, orderId, phone]);
+  }, [screen, orderId]);
 
-  /* ── UPI deeplink builders ── */
-  const buildUpiLink = (scheme: string, pathPrefix = '') => {
-    if (!shop) return '#';
-    const params = new URLSearchParams({
-      pa: shop.upiId,
-      pn: shop.name,
-      am: orderTotal.toFixed(2),
-      cu: 'INR',
-      tn: `Order ${orderId.slice(-6).toUpperCase()}`,
-      tr: orderId,
-    });
-    return `${scheme}://${pathPrefix}pay?${params.toString()}`;
+  /* ── UPI deeplink helpers ──
+     Setu (or the mock) returns a canonical `upi://pay?...` link. For per-app
+     buttons we just rewrite the scheme prefix — same query params, different
+     handler. Universal `upi://` opens Android's UPI picker. */
+  const rewriteScheme = (scheme: string, pathPrefix = '') => {
+    if (!paymentLink?.upiLink) return '#';
+    const after = paymentLink.upiLink.replace(/^upi:\/\//, '');
+    return `${scheme}://${pathPrefix}${after}`;
   };
 
   const openUpiApp = (scheme: string, pathPrefix = '') => {
-    const link = buildUpiLink(scheme, pathPrefix);
-    // Direct navigation — on Android this hands off to the UPI app; on desktop
-    // the browser silently fails (we already gate this behind a mobile check).
+    const link = rewriteScheme(scheme, pathPrefix);
+    if (link === '#') return;
     window.location.href = link;
   };
+
 
   const copyUpi = () => {
     if (!shop) return;
@@ -168,36 +241,83 @@ export default function ShopPage() {
 
   /* ── Success screen ── */
   if (screen === 'success') return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', padding: 32, textAlign: 'center', background: '#f0fdf4' }}>
-      <div style={{ width: 80, height: 80, borderRadius: '50%', background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 20 }}>
-        <CheckCircle2 size={44} color={GREEN} />
-      </div>
-      <div style={{ fontSize: 22, fontWeight: 800, color: DARK, letterSpacing: -0.5, marginBottom: 8 }}>Order Placed!</div>
-      <div style={{ fontSize: 14, color: '#374151', marginBottom: 6 }}>Your order <span style={{ fontWeight: 700, color: GREEN }}>{orderId}</span></div>
-      <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 32 }}>Preparing in {shop.deliveryTime} • We'll call you at {phone}</div>
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(180deg, #f0fdf4 0%, #fafffb 100%)', display: 'flex', flexDirection: 'column' }}>
+      <style>{`
+        @keyframes pop { 0% { transform: scale(0.4); opacity: 0 } 60% { transform: scale(1.08); opacity: 1 } 100% { transform: scale(1); opacity: 1 } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(12px) } to { opacity: 1; transform: translateY(0) } }
+      `}</style>
 
-      {shop.upiId && (
-        <div style={{ background: '#fff', border: '1px solid #a7f3d0', borderRadius: 14, padding: '16px 24px', marginBottom: 24, width: '100%', maxWidth: 320 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 }}>Pay via UPI</div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: GREEN, marginBottom: 4 }}>₹{total}</div>
-          <div style={{ fontSize: 13, color: '#374151', fontFamily: 'monospace' }}>{shop.upiId}</div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 28, textAlign: 'center' }}>
+        {/* Animated check */}
+        <div style={{
+          width: 92, height: 92, borderRadius: '50%',
+          background: 'linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%)',
+          border: `1px solid ${GREEN}`,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          marginBottom: 22,
+          boxShadow: '0 10px 30px rgba(22,163,74,0.25)',
+          animation: 'pop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
+        }}>
+          <CheckCircle2 size={50} color={GREEN} strokeWidth={2.4} />
         </div>
-      )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 320 }}>
-        <Link href="/shop/orders" style={{ background: GREEN, color: '#fff', padding: '14px 32px', borderRadius: 12, fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer', textDecoration: 'none', textAlign: 'center' }}>
-          Track Order
-        </Link>
-        <button onClick={() => { setScreen('menu'); setNote(''); }} style={{ background: '#fff', color: GREEN, padding: '14px 32px', borderRadius: 12, fontWeight: 700, fontSize: 14, border: `1px solid ${GREEN}`, cursor: 'pointer' }}>
-          Order More
-        </button>
+        <div style={{ animation: 'slideUp 0.45s 0.15s both' }}>
+          <div style={{ fontSize: 24, fontWeight: 900, color: DARK, letterSpacing: -0.6, marginBottom: 6 }}>
+            Order Placed!
+          </div>
+          <div style={{ fontSize: 13, color: '#374151', marginBottom: 4 }}>
+            Order <span style={{ fontFamily: 'monospace', fontWeight: 800, color: GREEN }}>#{orderId.slice(-6).toUpperCase()}</span>
+          </div>
+          <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 28 }}>
+            Preparing in {shop.deliveryTime} • We&apos;ll call you at {phone}
+          </div>
+        </div>
+
+        {orderTotal > 0 && (
+          <div style={{
+            background: '#fff', border: '1px solid #d1fae5', borderRadius: 16,
+            padding: '18px 22px', marginBottom: 22, width: '100%', maxWidth: 320,
+            boxShadow: '0 4px 16px rgba(15,40,23,0.06)',
+            animation: 'slideUp 0.45s 0.25s both',
+          }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 8 }}>Total Paid</div>
+            <div style={{ fontSize: 30, fontWeight: 900, color: GREEN, letterSpacing: -1, marginBottom: 4 }}>₹{orderTotal}</div>
+            {shop.upiId && (
+              <div style={{ fontSize: 11, color: '#6b7280', fontFamily: 'monospace' }}>
+                to {shop.upiId}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: '100%', maxWidth: 320, animation: 'slideUp 0.45s 0.35s both' }}>
+          <Link href="/shop/orders" style={{
+            background: GREEN, color: '#fff', padding: '14px 24px',
+            borderRadius: 12, fontWeight: 800, fontSize: 14,
+            textAlign: 'center',
+            boxShadow: '0 6px 18px rgba(22,163,74,0.35)',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}>
+            Track Order <ArrowRight size={15} />
+          </Link>
+          <button onClick={() => { setScreen('menu'); setNote(''); }} style={{
+            background: '#fff', color: DARK,
+            padding: '14px 24px', borderRadius: 12,
+            fontWeight: 700, fontSize: 14,
+            border: '1px solid #d1fae5', cursor: 'pointer',
+          }}>
+            Order More
+          </button>
+        </div>
       </div>
     </div>
   );
 
   /* ── Payment screen (UPI deeplink) ── */
   if (screen === 'payment') {
-    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(buildUpiLink('upi'))}`;
+    const qrSrc = paymentLink?.upiLink
+      ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=10&data=${encodeURIComponent(paymentLink.upiLink)}`
+      : '';
 
     const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
     const isAndroid = /android/i.test(ua);
@@ -207,65 +327,190 @@ export default function ShopPage() {
     // Correct UPI app schemes — universal `upi://` opens Android's UPI picker.
     // GPay India = `tez://`, PhonePe = `phonepe://`, Paytm = `paytmmp://`, BHIM uses universal upi://
     const apps = [
-      { name: 'GPay',     scheme: 'tez',     pathPrefix: 'upi/', color: '#1a73e8', bg: '#e8f0fe' },
-      { name: 'PhonePe',  scheme: 'phonepe', pathPrefix: '',     color: '#5f259f', bg: '#f3eaff' },
-      { name: 'Paytm',    scheme: 'paytmmp', pathPrefix: '',     color: '#00baf2', bg: '#e0f7ff' },
-      { name: 'BHIM',     scheme: 'upi',     pathPrefix: '',     color: '#ea580c', bg: '#fff1e6' },
+      { name: 'GPay',     short: 'G',  scheme: 'tez',     pathPrefix: 'upi/', color: '#1a73e8', bg: '#eaf2fe' },
+      { name: 'PhonePe',  short: 'P',  scheme: 'phonepe', pathPrefix: '',     color: '#5f259f', bg: '#f3eaff' },
+      { name: 'Paytm',    short: 'P',  scheme: 'paytmmp', pathPrefix: '',     color: '#00baf2', bg: '#e0f7ff' },
+      { name: 'BHIM',     short: 'B',  scheme: 'upi',     pathPrefix: '',     color: '#ea580c', bg: '#fff1e6' },
     ];
 
     return (
-      <div style={{ minHeight: '100vh', background: '#f9fafb', paddingBottom: 32 }}>
+      <div style={{ minHeight: '100vh', background: '#f5f7f6', paddingBottom: 32 }}>
+        <style>{`
+          @keyframes spin { to { transform: rotate(360deg) } }
+          @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+          @keyframes shine { 0% { transform: translateX(-110%) } 100% { transform: translateX(210%) } }
+        `}</style>
+
         {/* Header */}
-        <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
-          <button onClick={() => setScreen('checkout')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}><ChevronLeft size={22} color="#374151" /></button>
+        <div style={{
+          background: '#fff', borderBottom: '1px solid #e5e7eb',
+          padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 10,
+          position: 'sticky', top: 0, zIndex: 10,
+        }}>
+          <button onClick={() => setScreen('checkout')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex' }}>
+            <ChevronLeft size={22} color="#374151" />
+          </button>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 700, fontSize: 16, color: DARK }}>Complete Payment</div>
-            <div style={{ fontSize: 11, color: '#9ca3af' }}>Order #{orderId.slice(-6).toUpperCase()}</div>
+            <div style={{ fontWeight: 800, fontSize: 15, color: DARK }}>Complete Payment</div>
+            <div style={{ fontSize: 11, color: '#9ca3af', display: 'flex', alignItems: 'center', gap: 5, marginTop: 1 }}>
+              <ShieldCheck size={11} color={GREEN} /> Secure UPI · Order #{orderId.slice(-6).toUpperCase()}
+            </div>
           </div>
         </div>
 
-        <div style={{ padding: '20px 18px', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <StepBar current="payment" />
 
-          {/* Amount card */}
-          <div style={{ background: `linear-gradient(135deg, ${DARK} 0%, #14532d 100%)`, borderRadius: 16, padding: '24px 22px', color: '#fff', textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
-            <div style={{ position: 'absolute', top: -30, right: -30, width: 100, height: 100, borderRadius: '50%', background: 'rgba(22,163,74,0.2)' }} />
+        <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+          {/* Amount card — premium ticket style */}
+          <div style={{
+            background: `linear-gradient(135deg, ${DARK} 0%, #14532d 60%, #052e16 100%)`,
+            borderRadius: 18, padding: '22px 22px',
+            color: '#fff', position: 'relative', overflow: 'hidden',
+            boxShadow: '0 14px 30px rgba(15,40,23,0.25)',
+          }}>
+            <div aria-hidden style={{ position: 'absolute', top: -40, right: -40, width: 140, height: 140, borderRadius: '50%', background: 'rgba(74,222,128,0.18)' }} />
+            <div aria-hidden style={{ position: 'absolute', bottom: -30, left: -30, width: 100, height: 100, borderRadius: '50%', background: 'rgba(22,163,74,0.18)' }} />
+
             <div style={{ position: 'relative', zIndex: 1 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, color: '#a7f3d0', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>Amount to Pay</div>
-              <div style={{ fontSize: 36, fontWeight: 900, letterSpacing: -1, marginBottom: 4 }}>₹{orderTotal}</div>
-              <div style={{ fontSize: 12, color: '#a7f3d0' }}>to {shop.name}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: '#a7f3d0', textTransform: 'uppercase', letterSpacing: 0.8 }}>Paying to</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#fff', marginTop: 3, letterSpacing: -0.3 }}>{shop.name}</div>
+                  <div style={{ fontSize: 11, color: '#a7f3d0', fontFamily: 'monospace', marginTop: 2 }}>{shop.upiId}</div>
+                </div>
+                <div style={{
+                  width: 44, height: 44, borderRadius: 12,
+                  background: 'rgba(255,255,255,0.1)',
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: 900, fontSize: 18, color: '#fff',
+                  flexShrink: 0,
+                }}>{shop.name.charAt(0)}</div>
+              </div>
+
+              <div style={{
+                borderTop: '1px dashed rgba(255,255,255,0.25)',
+                paddingTop: 14, marginTop: 4,
+                display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
+              }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 800, color: '#a7f3d0', textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 }}>Amount</div>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
+                    <span style={{ fontSize: 18, fontWeight: 800, marginTop: 8 }}>₹</span>
+                    <span style={{ fontSize: 40, fontWeight: 900, letterSpacing: -1.5, lineHeight: 1 }}>{orderTotal}</span>
+                  </div>
+                </div>
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  background: 'rgba(74,222,128,0.18)', border: '1px solid rgba(74,222,128,0.4)',
+                  borderRadius: 100, padding: '5px 11px',
+                }}>
+                  <ShieldCheck size={12} color="#4ade80" />
+                  <span style={{ fontSize: 10, fontWeight: 800, color: '#4ade80', letterSpacing: 0.3 }}>VERIFIED</span>
+                </div>
+              </div>
             </div>
           </div>
 
+          {/* Link-loading & error gates ─ only render the pay options once we
+              have a Setu link. Without it, paying would mean nothing flows
+              back to us. */}
+          {!paymentLink && !linkError && (
+            <div style={{
+              background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb',
+              padding: '24px 18px', textAlign: 'center',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            }}>
+              <div style={{ width: 36, height: 36, margin: '0 auto 12px', position: 'relative' }}>
+                <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: `3px solid #d1fae5`, borderTopColor: GREEN, animation: 'spin 0.8s linear infinite' }} />
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: DARK, marginBottom: 4 }}>Preparing your secure payment link…</div>
+              <div style={{ fontSize: 11, color: '#9ca3af' }}>This takes a second.</div>
+            </div>
+          )}
+
+          {linkError && (
+            <div style={{
+              background: '#fef2f2', borderRadius: 14, border: '1px solid #fecaca',
+              padding: '14px 16px',
+            }}>
+              <div style={{ fontSize: 12, fontWeight: 800, color: '#991b1b', marginBottom: 4 }}>Could not start payment</div>
+              <div style={{ fontSize: 11, color: '#7f1d1d', marginBottom: 10 }}>{linkError}</div>
+              <button
+                onClick={async () => {
+                  setLinkError(null);
+                  try {
+                    const r = await fetch('/api/payments/upi/initiate', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ orderId }),
+                    });
+                    const d = await r.json();
+                    if (!r.ok) throw new Error(d.error || 'failed');
+                    setPaymentLink({ upiLink: d.upiLink, platformBillID: d.platformBillID, expiresAt: d.expiresAt });
+                  } catch (e) {
+                    setLinkError(e instanceof Error ? e.message : 'failed');
+                  }
+                }}
+                style={{
+                  background: '#dc2626', color: '#fff', border: 'none',
+                  padding: '8px 14px', borderRadius: 8, fontWeight: 700, fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
           {/* Mobile: UPI app buttons. Desktop: scan-to-pay hint + QR. */}
-          {isMobile ? (
-            <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '16px 18px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700, color: DARK, marginBottom: 14 }}>
-                <Smartphone size={14} color={GREEN} /> Pay with UPI App
+          {paymentLink && (isMobile ? (
+            <div style={{ background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb', padding: '16px 16px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 800, color: DARK, marginBottom: 14 }}>
+                <Smartphone size={14} color={GREEN} /> Pay with your UPI app
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12 }}>
                 {apps.map(a => (
                   <button key={a.name} onClick={() => openUpiApp(a.scheme, a.pathPrefix)} style={{
                     display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
-                    padding: '12px 6px', borderRadius: 12,
-                    background: a.bg, border: `1px solid ${a.color}30`,
+                    padding: '12px 4px', borderRadius: 12,
+                    background: '#fff', border: `1px solid #e5e7eb`,
                     cursor: 'pointer',
-                  }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 9, background: a.color, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontWeight: 800, fontSize: 14 }}>
-                      {a.name.charAt(0)}
+                    transition: 'transform 0.12s ease, border-color 0.12s ease',
+                  }}
+                  onMouseDown={e => (e.currentTarget.style.transform = 'scale(0.96)')}
+                  onMouseUp={e => (e.currentTarget.style.transform = 'scale(1)')}
+                  onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
+                  >
+                    <div style={{
+                      width: 38, height: 38, borderRadius: 10, background: a.bg,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: a.color, fontWeight: 900, fontSize: 16,
+                      border: `1px solid ${a.color}25`,
+                    }}>
+                      {a.short}
                     </div>
-                    <div style={{ fontSize: 10, fontWeight: 700, color: a.color }}>{a.name}</div>
+                    <div style={{ fontSize: 10, fontWeight: 700, color: DARK }}>{a.name}</div>
                   </button>
                 ))}
               </div>
 
               <button onClick={() => openUpiApp('upi')} style={{
                 width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                background: GREEN, color: '#fff', padding: '13px',
-                borderRadius: 10, fontWeight: 800, fontSize: 14, border: 'none',
-                cursor: 'pointer', boxShadow: '0 4px 14px rgba(22,163,74,0.35)',
+                background: `linear-gradient(135deg, ${GREEN} 0%, #15803d 100%)`,
+                color: '#fff', padding: '14px',
+                borderRadius: 12, fontWeight: 800, fontSize: 14, border: 'none',
+                cursor: 'pointer', boxShadow: '0 6px 18px rgba(22,163,74,0.35)',
+                position: 'relative', overflow: 'hidden',
               }}>
                 <Wallet size={16} /> Pay ₹{orderTotal} via Any UPI App
+                <span aria-hidden style={{
+                  position: 'absolute', top: 0, left: 0, height: '100%', width: '40%',
+                  background: 'linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent)',
+                  animation: 'shine 2.6s linear infinite',
+                }} />
               </button>
 
               {isIOS && (
@@ -275,57 +520,140 @@ export default function ShopPage() {
               )}
             </div>
           ) : (
-            <div style={{ background: '#fff7ed', borderRadius: 14, border: '1px solid #fed7aa', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-              <Smartphone size={20} color="#ea580c" style={{ flexShrink: 0 }} />
+            <div style={{
+              background: 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%)',
+              borderRadius: 14, border: '1px solid #fed7aa',
+              padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12,
+            }}>
+              <div style={{
+                width: 36, height: 36, borderRadius: 10, background: '#fff', flexShrink: 0,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                border: '1px solid #fed7aa',
+              }}>
+                <Smartphone size={18} color="#ea580c" />
+              </div>
               <div style={{ fontSize: 12, color: '#9a3412', lineHeight: 1.5 }}>
                 <strong style={{ color: '#7c2d12' }}>Scan the QR with your phone</strong> — UPI apps only work on mobile devices.
               </div>
             </div>
+          ))}
+
+          {/* QR card — receipt style with side perforations */}
+          {paymentLink && qrSrc && (
+          <div style={{
+            background: '#fff', borderRadius: 16, border: '1px solid #e5e7eb',
+            padding: '20px 18px', textAlign: 'center',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            position: 'relative',
+          }}>
+            <div style={{
+              fontSize: 11, fontWeight: 800, color: GREEN,
+              textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 12,
+            }}>
+              {isMobile ? 'Or scan QR' : 'Scan to pay'}
+            </div>
+            <div style={{
+              display: 'inline-block', padding: 10,
+              borderRadius: 14, background: '#fff',
+              border: '2px solid #d1fae5',
+              position: 'relative',
+            }}>
+              {/* Corner brackets */}
+              {([
+                [0, 0, 'tl'], [0, 1, 'tr'], [1, 0, 'bl'], [1, 1, 'br'],
+              ] as const).map(([y, x, k]) => (
+                <div key={k} aria-hidden style={{
+                  position: 'absolute',
+                  [y === 0 ? 'top' : 'bottom']: -2,
+                  [x === 0 ? 'left' : 'right']: -2,
+                  width: 16, height: 16,
+                  borderTop:    y === 0 ? `3px solid ${GREEN}` : 'none',
+                  borderBottom: y === 1 ? `3px solid ${GREEN}` : 'none',
+                  borderLeft:   x === 0 ? `3px solid ${GREEN}` : 'none',
+                  borderRight:  x === 1 ? `3px solid ${GREEN}` : 'none',
+                  borderRadius: y === 0
+                    ? (x === 0 ? '6px 0 0 0' : '0 6px 0 0')
+                    : (x === 0 ? '0 0 0 6px' : '0 0 6px 0'),
+                }} />
+              ))}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={qrSrc} alt="UPI QR" width={210} height={210} style={{ display: 'block', borderRadius: 6 }} />
+            </div>
+            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5 }}>
+              <ShieldCheck size={11} color={GREEN} />
+              Open any UPI app and scan
+            </div>
+          </div>
           )}
 
-          {/* QR code (always shown — primary on desktop, fallback on mobile) */}
-          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '20px 18px', textAlign: 'center' }}>
-            <div style={{ fontSize: 12, fontWeight: 700, color: DARK, marginBottom: 12 }}>
-              {isMobile ? 'Or Scan QR Code' : 'Scan to Pay'}
-            </div>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={qrSrc} alt="UPI QR" width={200} height={200} style={{ display: 'block', margin: '0 auto', borderRadius: 8 }} />
-            <div style={{ fontSize: 11, color: '#9ca3af', marginTop: 10 }}>Open any UPI app and scan</div>
-          </div>
-
           {/* Manual UPI ID copy */}
-          <div style={{ background: '#f0fdf4', borderRadius: 14, border: '1px solid #a7f3d0', padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: GREEN, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3 }}>Or pay manually to</div>
-              <div style={{ fontSize: 14, fontWeight: 700, color: DARK, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis' }}>{shop.upiId}</div>
+          <div style={{
+            background: '#f0fdf4', borderRadius: 14, border: '1px solid #a7f3d0',
+            padding: '13px 16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+          }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 10, fontWeight: 800, color: GREEN, textTransform: 'uppercase', letterSpacing: 0.7, marginBottom: 3 }}>Or pay manually to</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: DARK, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{shop.upiId}</div>
             </div>
-            <button onClick={copyUpi} style={{ display: 'flex', alignItems: 'center', gap: 5, background: '#fff', border: `1px solid ${GREEN}`, color: GREEN, padding: '8px 14px', borderRadius: 8, fontWeight: 700, fontSize: 12, cursor: 'pointer', flexShrink: 0 }}>
-              <Copy size={12} /> {copied ? 'Copied!' : 'Copy'}
+            <button onClick={copyUpi} style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: copied ? GREEN : '#fff',
+              border: `1px solid ${GREEN}`, color: copied ? '#fff' : GREEN,
+              padding: '8px 14px', borderRadius: 9,
+              fontWeight: 800, fontSize: 12, cursor: 'pointer', flexShrink: 0,
+              transition: 'all 0.18s ease',
+            }}>
+              {copied ? <CheckCircle2 size={12} /> : <Copy size={12} />}
+              {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
 
           {/* Live verification status — driven by server polling */}
           {payState === 'paid' ? (
-            <div style={{ background: '#f0fdf4', borderRadius: 14, border: `2px solid ${GREEN}`, padding: '20px 16px', textAlign: 'center' }}>
-              <div style={{ width: 48, height: 48, borderRadius: '50%', background: '#dcfce7', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>
-                <CheckCircle2 size={26} color={GREEN} />
+            <div style={{
+              background: 'linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%)',
+              borderRadius: 16, border: `2px solid ${GREEN}`,
+              padding: '20px 16px', textAlign: 'center',
+              boxShadow: '0 8px 24px rgba(22,163,74,0.18)',
+            }}>
+              <div style={{ width: 52, height: 52, borderRadius: '50%', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px', boxShadow: '0 4px 12px rgba(22,163,74,0.2)' }}>
+                <CheckCircle2 size={28} color={GREEN} strokeWidth={2.5} />
               </div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: DARK, marginBottom: 4 }}>Payment Confirmed</div>
-              <div style={{ fontSize: 12, color: '#9ca3af' }}>Taking you to your order…</div>
+              <div style={{ fontSize: 16, fontWeight: 900, color: DARK, marginBottom: 3 }}>Payment Confirmed</div>
+              <div style={{ fontSize: 12, color: '#374151' }}>Taking you to your order…</div>
+            </div>
+          ) : payState === 'failed' ? (
+            <div style={{
+              background: '#fef2f2', borderRadius: 14, border: '1px solid #fecaca',
+              padding: '16px', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#991b1b', marginBottom: 4 }}>Payment failed</div>
+              <div style={{ fontSize: 12, color: '#7f1d1d' }}>Try again or pick a different UPI app.</div>
+            </div>
+          ) : payState === 'expired' ? (
+            <div style={{
+              background: '#fff7ed', borderRadius: 14, border: '1px solid #fed7aa',
+              padding: '16px', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 14, fontWeight: 800, color: '#9a3412', marginBottom: 4 }}>Link expired</div>
+              <div style={{ fontSize: 12, color: '#7c2d12' }}>Place the order again to retry.</div>
             </div>
           ) : (
-            <div style={{ background: '#eff6ff', borderRadius: 14, border: '1px solid #bfdbfe', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ position: 'relative', width: 32, height: 32, flexShrink: 0 }}>
-                <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '2px solid #bfdbfe', borderTopColor: '#2563eb', animation: 'spin 0.9s linear infinite' }} />
-                <style>{`@keyframes spin{to{transform:rotate(360deg)}}@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}`}</style>
+            <div style={{
+              background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb',
+              padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 14,
+            }}>
+              <div style={{ position: 'relative', width: 36, height: 36, flexShrink: 0 }}>
+                <div style={{ position: 'absolute', inset: 0, borderRadius: '50%', border: '3px solid #dbeafe', borderTopColor: '#2563eb', animation: 'spin 0.9s linear infinite' }} />
               </div>
-              <div style={{ fontSize: 12, color: '#1e3a8a', lineHeight: 1.55 }}>
+              <div style={{ fontSize: 12, color: '#1e3a8a', lineHeight: 1.55, flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#2563eb', animation: 'pulse 1.4s infinite' }} />
                   <strong>Waiting for payment confirmation</strong>
                 </div>
-                <div style={{ marginTop: 3 }}>
-                  Complete the UPI transfer — we'll detect it automatically and update your order. This usually takes a few seconds.
+                <div style={{ marginTop: 3, color: '#475569' }}>
+                  Complete the UPI transfer — we&apos;ll detect it automatically.
                 </div>
               </div>
             </div>
@@ -337,147 +665,228 @@ export default function ShopPage() {
               onClick={() => setScreen('success')}
               style={{
                 background: '#fff', color: '#374151',
-                padding: '13px', borderRadius: 14,
-                fontWeight: 600, fontSize: 13, border: '1px solid #e5e7eb',
+                padding: '13px', borderRadius: 12,
+                fontWeight: 700, fontSize: 13, border: '1px solid #e5e7eb',
                 cursor: 'pointer',
                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
               }}
             >
-              <Receipt size={14} /> I'll wait on the order tracking page
+              <Receipt size={14} /> I&apos;ll wait on the order tracking page
             </button>
           )}
+
+          {/* Trust strip */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
+            fontSize: 10, color: '#9ca3af', marginTop: 4,
+            padding: '6px 0',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <ShieldCheck size={12} color={GREEN} /> Secured by UPI
+            </div>
+            <span>•</span>
+            <div>Powered by NPCI</div>
+          </div>
         </div>
       </div>
     );
   }
 
   /* ── Checkout screen ── */
-  if (screen === 'checkout') return (
-    <div style={{ minHeight: '100vh', background: '#f9fafb', paddingBottom: 32 }}>
-      {/* Header */}
-      <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
-        <button onClick={() => setScreen('cart')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}><X size={20} color="#374151" /></button>
-        <div style={{ fontWeight: 700, fontSize: 16, color: DARK }}>Checkout</div>
-      </div>
+  if (screen === 'checkout') {
+    const canPlace = !placing && name.trim() && phone.trim().length >= 10;
+    return (
+      <div style={{ minHeight: '100vh', background: '#f5f7f6', paddingBottom: 32 }}>
+        {/* Header */}
+        <div style={{
+          background: '#fff', borderBottom: '1px solid #e5e7eb',
+          padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12,
+          position: 'sticky', top: 0, zIndex: 10,
+        }}>
+          <button onClick={() => setScreen('cart')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex' }}>
+            <ChevronLeft size={22} color="#374151" />
+          </button>
+          <div style={{ fontWeight: 800, fontSize: 16, color: DARK }}>Checkout</div>
+        </div>
 
-      <div style={{ padding: '20px 18px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {/* Order summary */}
-        <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '16px 18px' }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: DARK, marginBottom: 12 }}>Your Order</div>
-          {cart.map(c => (
-            <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13 }}>
-              <span style={{ color: '#374151' }}>{c.qty}× {c.name}</span>
-              <span style={{ fontWeight: 700, color: DARK }}>₹{c.price * c.qty}</span>
+        <StepBar current="checkout" />
+
+        <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* Order summary */}
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '16px 18px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800, fontSize: 13, color: DARK, marginBottom: 12 }}>
+              <Receipt size={14} color={GREEN} /> Your Order
             </div>
-          ))}
-          <div style={{ borderTop: '1px dashed #e5e7eb', paddingTop: 10, marginTop: 4, display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 15 }}>
-            <span>Total</span>
-            <span style={{ color: GREEN }}>₹{total}</span>
-          </div>
-        </div>
-
-        {/* Delivery info */}
-        <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '16px 18px' }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: DARK, marginBottom: 14 }}>Your Details</div>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Name *</div>
-            <input
-              value={name} onChange={e => setName(e.target.value)}
-              placeholder="Your full name"
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: `1px solid ${name ? '#a7f3d0' : '#e5e7eb'}`, fontSize: 14, color: DARK, outline: 'none', boxSizing: 'border-box' }}
-            />
-          </div>
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Phone *</div>
-            <input
-              value={phone} onChange={e => setPhone(e.target.value)}
-              placeholder="10-digit number"
-              type="tel" inputMode="numeric"
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: `1px solid ${phone ? '#a7f3d0' : '#e5e7eb'}`, fontSize: 14, color: DARK, outline: 'none', boxSizing: 'border-box' }}
-            />
-          </div>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5 }}>Special Note (optional)</div>
-            <textarea
-              value={note} onChange={e => setNote(e.target.value)}
-              placeholder="Less spicy, extra chutney…"
-              rows={2}
-              style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #e5e7eb', fontSize: 13, color: DARK, outline: 'none', resize: 'none', boxSizing: 'border-box' }}
-            />
-          </div>
-        </div>
-
-        {/* Payment method picker */}
-        {shop.upiId && (
-          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 14, padding: '16px 18px' }}>
-            <div style={{ fontSize: 11, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>Choose Payment</div>
-
-            <button
-              onClick={() => placeOrder('upi')}
-              disabled={placing || !name.trim() || phone.trim().length < 10}
-              style={{
-                width: '100%', display: 'flex', alignItems: 'center', gap: 12,
-                background: placing || !name.trim() || phone.trim().length < 10 ? '#86efac' : GREEN,
-                color: '#fff', padding: '14px 18px', borderRadius: 12,
-                fontWeight: 800, fontSize: 15, border: 'none',
-                cursor: placing || !name.trim() || phone.trim().length < 10 ? 'not-allowed' : 'pointer',
-                marginBottom: 10,
-              }}
-            >
-              <Wallet size={18} />
-              <div style={{ flex: 1, textAlign: 'left' }}>
-                <div>Pay ₹{total} via UPI</div>
-                <div style={{ fontSize: 11, fontWeight: 500, opacity: 0.9, marginTop: 2 }}>GPay · PhonePe · Paytm · BHIM</div>
+            {cart.map(c => (
+              <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 13 }}>
+                <span style={{ color: '#374151' }}>
+                  <span style={{ display: 'inline-block', minWidth: 22, fontWeight: 700, color: GREEN }}>{c.qty}×</span>
+                  {c.name}
+                </span>
+                <span style={{ fontWeight: 700, color: DARK }}>₹{c.price * c.qty}</span>
               </div>
-            </button>
+            ))}
+            <div style={{
+              borderTop: '1px dashed #e5e7eb', paddingTop: 10, marginTop: 4,
+              display: 'flex', justifyContent: 'space-between', fontWeight: 800, fontSize: 15,
+            }}>
+              <span>Total</span>
+              <span style={{ color: GREEN }}>₹{total}</span>
+            </div>
+          </div>
+
+          {/* Delivery info */}
+          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '16px 18px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+            <div style={{ fontWeight: 800, fontSize: 13, color: DARK, marginBottom: 14 }}>Your Details</div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Name *</div>
+              <input
+                value={name} onChange={e => setName(e.target.value)}
+                placeholder="Your full name"
+                style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: `1px solid ${name ? '#a7f3d0' : '#e5e7eb'}`, fontSize: 14, color: DARK, outline: 'none', boxSizing: 'border-box', background: '#fff' }}
+              />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Phone *</div>
+              <input
+                value={phone} onChange={e => setPhone(e.target.value)}
+                placeholder="10-digit number"
+                type="tel" inputMode="numeric"
+                style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: `1px solid ${phone ? '#a7f3d0' : '#e5e7eb'}`, fontSize: 14, color: DARK, outline: 'none', boxSizing: 'border-box', background: '#fff' }}
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 800, color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>Special Note (optional)</div>
+              <textarea
+                value={note} onChange={e => setNote(e.target.value)}
+                placeholder="Less spicy, extra chutney…"
+                rows={2}
+                style={{ width: '100%', padding: '12px 14px', borderRadius: 10, border: '1px solid #e5e7eb', fontSize: 13, color: DARK, outline: 'none', resize: 'none', boxSizing: 'border-box', background: '#fff' }}
+              />
+            </div>
+          </div>
+
+          {/* Payment method picker */}
+          <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 14, padding: '16px 18px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 12 }}>Choose Payment</div>
+
+            {shop.upiId && (
+              <button
+                onClick={() => placeOrder('upi')}
+                disabled={!canPlace}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+                  background: canPlace
+                    ? `linear-gradient(135deg, ${GREEN} 0%, #15803d 100%)`
+                    : '#86efac',
+                  color: '#fff', padding: '14px 16px', borderRadius: 12,
+                  fontWeight: 800, fontSize: 14, border: 'none',
+                  cursor: canPlace ? 'pointer' : 'not-allowed',
+                  marginBottom: 10,
+                  boxShadow: canPlace ? '0 6px 18px rgba(22,163,74,0.32)' : 'none',
+                  position: 'relative', overflow: 'hidden',
+                }}
+              >
+                <div style={{
+                  width: 36, height: 36, borderRadius: 10, background: 'rgba(255,255,255,0.2)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>
+                  <Wallet size={18} color="#fff" />
+                </div>
+                <div style={{ flex: 1, textAlign: 'left' }}>
+                  <div style={{ fontSize: 14, fontWeight: 800 }}>Pay ₹{total} via UPI</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, opacity: 0.9, marginTop: 2 }}>GPay · PhonePe · Paytm · BHIM</div>
+                </div>
+                <ArrowRight size={16} />
+              </button>
+            )}
 
             <button
               onClick={() => placeOrder('cash')}
-              disabled={placing || !name.trim() || phone.trim().length < 10}
+              disabled={!canPlace}
               style={{
                 width: '100%', display: 'flex', alignItems: 'center', gap: 12,
                 background: '#fff', color: DARK,
-                padding: '14px 18px', borderRadius: 12,
+                padding: '14px 16px', borderRadius: 12,
                 fontWeight: 700, fontSize: 14, border: '1px solid #e5e7eb',
-                cursor: placing || !name.trim() || phone.trim().length < 10 ? 'not-allowed' : 'pointer',
+                cursor: canPlace ? 'pointer' : 'not-allowed',
+                opacity: canPlace ? 1 : 0.6,
               }}
             >
-              <Banknote size={18} color="#16a34a" />
+              <div style={{
+                width: 36, height: 36, borderRadius: 10, background: '#dcfce7',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}>
+                <Banknote size={18} color={GREEN} />
+              </div>
               <div style={{ flex: 1, textAlign: 'left' }}>
                 <div>Pay at Counter</div>
                 <div style={{ fontSize: 11, fontWeight: 500, color: '#9ca3af', marginTop: 2 }}>Cash on pickup</div>
               </div>
+              <ChevronUp size={16} color="#9ca3af" style={{ transform: 'rotate(90deg)' }} />
             </button>
           </div>
-        )}
+
+          {/* Trust strip */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            fontSize: 11, color: '#9ca3af', marginTop: 4,
+          }}>
+            <ShieldCheck size={12} color={GREEN} />
+            Your details stay private. Payment is secured by UPI.
+          </div>
+        </div>
       </div>
-    </div>
-  );
+    );
+  }
 
   /* ── Cart screen ── */
   if (screen === 'cart') return (
-    <div style={{ minHeight: '100vh', background: '#f9fafb', paddingBottom: 120 }}>
-      <div style={{ background: '#fff', borderBottom: '1px solid #e5e7eb', padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12, position: 'sticky', top: 0, zIndex: 10 }}>
-        <button onClick={() => setScreen('menu')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4 }}><X size={20} color="#374151" /></button>
-        <div style={{ fontWeight: 700, fontSize: 16, color: DARK }}>Your Cart</div>
+    <div style={{ minHeight: '100vh', background: '#f5f7f6', paddingBottom: 120 }}>
+      <div style={{
+        background: '#fff', borderBottom: '1px solid #e5e7eb',
+        padding: '14px 18px', display: 'flex', alignItems: 'center', gap: 12,
+        position: 'sticky', top: 0, zIndex: 10,
+      }}>
+        <button onClick={() => setScreen('menu')} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 4, display: 'flex' }}>
+          <X size={20} color="#374151" />
+        </button>
+        <div style={{ fontWeight: 800, fontSize: 16, color: DARK }}>Your Cart</div>
         {cart.length > 0 && (
-          <button onClick={clearCart} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#dc2626', fontWeight: 600 }}>Clear all</button>
+          <button onClick={clearCart} style={{ marginLeft: 'auto', background: 'none', border: 'none', cursor: 'pointer', fontSize: 12, color: '#dc2626', fontWeight: 700 }}>Clear all</button>
         )}
       </div>
 
+      {cart.length > 0 && <StepBar current="cart" />}
+
       {cart.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '80px 32px' }}>
-          <ShoppingCart size={48} color="#d1d5db" style={{ marginBottom: 16 }} />
-          <div style={{ fontSize: 15, fontWeight: 700, color: '#374151', marginBottom: 6 }}>Your cart is empty</div>
+          <div style={{
+            width: 88, height: 88, borderRadius: '50%', background: '#fff',
+            border: '1px solid #e5e7eb',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            margin: '0 auto 18px',
+          }}>
+            <ShoppingCart size={38} color="#d1d5db" />
+          </div>
+          <div style={{ fontSize: 16, fontWeight: 800, color: '#374151', marginBottom: 6 }}>Your cart is empty</div>
           <div style={{ fontSize: 13, color: '#9ca3af', marginBottom: 24 }}>Add items from the menu</div>
-          <button onClick={() => setScreen('menu')} style={{ background: GREEN, color: '#fff', padding: '12px 28px', borderRadius: 12, fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer' }}>
+          <button onClick={() => setScreen('menu')} style={{
+            background: GREEN, color: '#fff', padding: '12px 28px', borderRadius: 12,
+            fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer',
+            boxShadow: '0 6px 16px rgba(22,163,74,0.32)',
+          }}>
             Browse Menu
           </button>
         </div>
       ) : (
-        <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ padding: '14px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {cart.map(item => (
-            <div key={item.id} style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div key={item.id} style={{
+              background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb',
+              padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 12,
+              boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            }}>
               <div style={{ flex: 1 }}>
                 <div style={{ fontWeight: 700, fontSize: 14, color: DARK }}>{item.name}</div>
                 <div style={{ fontSize: 12, color: '#9ca3af' }}>₹{item.price} each</div>
@@ -495,7 +904,11 @@ export default function ShopPage() {
             </div>
           ))}
 
-          <div style={{ background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb', padding: '14px 16px', marginTop: 8 }}>
+          <div style={{
+            background: '#fff', borderRadius: 14, border: '1px solid #e5e7eb',
+            padding: '14px 16px', marginTop: 4,
+            boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+          }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, color: '#374151', marginBottom: 6 }}>
               <span>Subtotal</span><span>₹{total}</span>
             </div>
@@ -512,19 +925,28 @@ export default function ShopPage() {
       )}
 
       {cart.length > 0 && (
-        <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 480, padding: '14px 18px', background: '#fff', borderTop: '1px solid #e5e7eb' }}>
+        <div style={{
+          position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+          width: '100%', maxWidth: 480, padding: '14px 18px',
+          background: 'rgba(255,255,255,0.95)', backdropFilter: 'blur(10px)',
+          borderTop: '1px solid #e5e7eb',
+        }}>
           <button
             onClick={() => setScreen('checkout')}
             disabled={total < shop.minOrder}
             style={{
-              background: total < shop.minOrder ? '#86efac' : GREEN,
+              background: total < shop.minOrder
+                ? '#86efac'
+                : `linear-gradient(135deg, ${GREEN} 0%, #15803d 100%)`,
               color: '#fff', padding: '15px', borderRadius: 14,
               fontWeight: 800, fontSize: 15, border: 'none',
               cursor: total < shop.minOrder ? 'not-allowed' : 'pointer',
               width: '100%',
+              boxShadow: total < shop.minOrder ? 'none' : '0 8px 22px rgba(22,163,74,0.35)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             }}
           >
-            Proceed to Checkout · ₹{total}
+            Proceed to Checkout · ₹{total} <ArrowRight size={16} />
           </button>
         </div>
       )}
@@ -533,7 +955,7 @@ export default function ShopPage() {
 
   /* ── Menu screen ── */
   return (
-    <div style={{ minHeight: '100vh', background: '#f9fafb', paddingBottom: 100 }}>
+    <div style={{ minHeight: '100vh', background: '#f5f7f6', paddingBottom: 100 }}>
 
       {/* Hero banner */}
       <div style={{ background: `linear-gradient(135deg, ${DARK} 0%, #14532d 100%)`, padding: '24px 18px 20px', position: 'relative', overflow: 'hidden' }}>
@@ -673,11 +1095,13 @@ export default function ShopPage() {
       {cartCount > 0 && (
         <div style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 100, width: 'calc(100% - 36px)', maxWidth: 444 }}>
           <button onClick={() => setScreen('cart')} style={{
-            width: '100%', background: GREEN, color: '#fff',
+            width: '100%',
+            background: `linear-gradient(135deg, ${GREEN} 0%, #15803d 100%)`,
+            color: '#fff',
             padding: '15px 20px', borderRadius: 16,
             fontWeight: 800, fontSize: 15, border: 'none',
             cursor: 'pointer',
-            boxShadow: '0 8px 30px rgba(22,163,74,0.45)',
+            boxShadow: '0 10px 30px rgba(22,163,74,0.45)',
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>

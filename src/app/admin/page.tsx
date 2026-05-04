@@ -1,14 +1,15 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { ShieldCheck, Store, ShoppingBag, Users, IndianRupee, ToggleLeft, ToggleRight, LogOut, Search, Phone, Calendar, TrendingUp, Lock } from 'lucide-react';
+import { ShieldCheck, Store, ShoppingBag, Users, IndianRupee, ToggleLeft, ToggleRight, LogOut, Search, Phone, Calendar, TrendingUp, Lock, KeyRound, Copy, RefreshCw, Eye, EyeOff } from 'lucide-react';
 
 const GREEN = '#16a34a';
 const DARK  = '#0f2817';
 
 interface Vendor {
   id: string; phone: string; ownerName: string; shopName: string;
-  shopId: string; isActive: boolean; createdAt: string; lastLogin: string;
+  shopId: string; loginToken?: string;
+  isActive: boolean; createdAt: string; lastLogin: string;
 }
 
 interface Order {
@@ -22,7 +23,7 @@ interface Admin { name: string; phone: string; }
 
 const CARD: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.04)' };
 
-export default function AdminPage() {
+function AdminPageInner() {
   const router = useRouter();
   const params = useSearchParams();
   const [admin,   setAdmin]   = useState<Admin | null>(null);
@@ -33,6 +34,8 @@ export default function AdminPage() {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [toast,   setToast]   = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [revealedTokens, setRevealedTokens] = useState<Record<string, boolean>>({});
+  const [regenConfirmId, setRegenConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
     const verify = async () => {
@@ -88,6 +91,41 @@ export default function AdminPage() {
     setConfirmId(null);
     load();
     showToast(`${v.shopName} ${!v.isActive ? 'activated' : 'deactivated'}`);
+  };
+
+  const toggleReveal = (id: string) => {
+    setRevealedTokens(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const copyToken = async (token: string) => {
+    try {
+      await navigator.clipboard.writeText(token);
+      showToast('Token copied to clipboard');
+    } catch {
+      showToast('Could not copy — copy manually');
+    }
+  };
+
+  const regenerateToken = async (v: Vendor) => {
+    const res = await fetch('/api/vendors/regenerate-token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: v.id }),
+    });
+    setRegenConfirmId(null);
+    if (!res.ok) { showToast('Failed to regenerate token'); return; }
+    setRevealedTokens(prev => ({ ...prev, [v.id]: true })); // auto-reveal on regen
+    load();
+    showToast(`New token issued for ${v.shopName}`);
+  };
+
+  const maskToken = (t?: string) => {
+    if (!t) return '— not set —';
+    // Show first prefix + last 4, mask the middle.
+    if (t.length <= 8) return '•'.repeat(t.length);
+    const prefix = t.slice(0, 4);
+    const suffix = t.slice(-4);
+    return `${prefix}-••••-••••-${suffix}`;
   };
 
   const logout = () => { localStorage.removeItem('swiq_admin'); router.push('/'); };
@@ -276,10 +314,10 @@ export default function AdminPage() {
         {tab === 'vendors' && (
           <div style={CARD}>
             <div className="adm-tbl">
-            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 760 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 980 }}>
               <thead>
                 <tr>
-                  {['Vendor', 'Phone', 'Joined', 'Last Login', 'Status', 'Action'].map(h => (
+                  {['Vendor', 'Phone', 'Login Token', 'Last Login', 'Status', 'Action'].map(h => (
                     <th key={h} style={{ textAlign: 'left', padding: '12px 18px', fontSize: 10, fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: 0.6, background: '#f0fdf4', borderBottom: '1px solid #d1fae5' }}>{h}</th>
                   ))}
                 </tr>
@@ -301,11 +339,58 @@ export default function AdminPage() {
                     <td style={{ padding: '12px 18px', fontSize: 12, color: '#374151' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Phone size={11} color="#9ca3af" /> {v.phone}</div>
                     </td>
-                    <td style={{ padding: '12px 18px', fontSize: 12, color: '#9ca3af' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}><Calendar size={11} /> {new Date(v.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+                    <td style={{ padding: '12px 18px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{
+                          display: 'inline-flex', alignItems: 'center', gap: 6,
+                          background: v.loginToken ? '#f0fdf4' : '#fef2f2',
+                          border: `1px solid ${v.loginToken ? '#a7f3d0' : '#fecaca'}`,
+                          borderRadius: 7, padding: '5px 10px',
+                          fontSize: 11, fontFamily: 'monospace', fontWeight: 700,
+                          color: v.loginToken ? DARK : '#dc2626',
+                          maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          <KeyRound size={11} color={v.loginToken ? GREEN : '#dc2626'} />
+                          {revealedTokens[v.id] && v.loginToken ? v.loginToken : maskToken(v.loginToken)}
+                        </div>
+                        {v.loginToken && (
+                          <>
+                            <button onClick={() => toggleReveal(v.id)} title={revealedTokens[v.id] ? 'Hide' : 'Reveal'} style={{
+                              background: '#fff', border: '1px solid #d1fae5', borderRadius: 6,
+                              width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              cursor: 'pointer', color: '#374151',
+                            }}>
+                              {revealedTokens[v.id] ? <EyeOff size={12} /> : <Eye size={12} />}
+                            </button>
+                            <button onClick={() => copyToken(v.loginToken!)} title="Copy" style={{
+                              background: '#fff', border: '1px solid #d1fae5', borderRadius: 6,
+                              width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                              cursor: 'pointer', color: '#374151',
+                            }}>
+                              <Copy size={12} />
+                            </button>
+                          </>
+                        )}
+                        {regenConfirmId === v.id ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <button onClick={() => regenerateToken(v)} style={{ background: '#dc2626', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}>Confirm</button>
+                            <button onClick={() => setRegenConfirmId(null)} style={{ background: '#fff', color: '#9ca3af', border: '1px solid #d1fae5', borderRadius: 6, padding: '5px 8px', fontSize: 11, cursor: 'pointer' }}>Cancel</button>
+                          </div>
+                        ) : (
+                          <button onClick={() => setRegenConfirmId(v.id)} title="Regenerate token" style={{
+                            background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 6,
+                            width: 26, height: 26, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            cursor: 'pointer', color: '#ea580c',
+                          }}>
+                            <RefreshCw size={12} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                     <td style={{ padding: '12px 18px', fontSize: 12, color: '#9ca3af' }}>
-                      {new Date(v.lastLogin).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <Calendar size={11} /> {new Date(v.lastLogin).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                      </div>
                     </td>
                     <td style={{ padding: '12px 18px' }}>
                       <span style={{
@@ -339,6 +424,7 @@ export default function AdminPage() {
                 {filteredVendors.length === 0 && (
                   <tr><td colSpan={6} style={{ textAlign: 'center', padding: 48, fontSize: 13, color: '#9ca3af' }}>No vendors found</td></tr>
                 )}
+                {/* colSpan unchanged: we replaced "Joined" column with "Login Token" so still 6 columns */}
               </tbody>
             </table>
             </div>
@@ -392,5 +478,24 @@ export default function AdminPage() {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Wrap in Suspense — required by Next.js when a client component uses
+ * `useSearchParams()` and the page is statically prerendered (e.g. by
+ * Cloudflare's OpenNext build, which fails on the CSR bailout otherwise).
+ */
+export default function AdminPage() {
+  return (
+    <Suspense
+      fallback={
+        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, color: '#9ca3af' }}>
+          Loading admin…
+        </div>
+      }
+    >
+      <AdminPageInner />
+    </Suspense>
   );
 }
