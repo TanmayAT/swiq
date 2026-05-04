@@ -1,21 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
 import crypto from 'crypto';
-
-const FILE = path.join(process.cwd(), 'data', 'vendors.json');
-
-interface Vendor {
-  id: string;
-  phone: string;
-  ownerName: string;
-  shopName: string;
-  shopId: string;
-  loginToken?: string;
-  isActive: boolean;
-  createdAt: string;
-  lastLogin: string;
-}
+import { db, Vendor } from '@/lib/db';
 
 /** Generate a vendor login token: SWQ-XXXX-XXXX-XXXX (12 alphanum chars). */
 export function generateVendorToken(): string {
@@ -28,35 +13,30 @@ export function generateVendorToken(): string {
 }
 
 export async function GET() {
-  const vendors: Vendor[] = JSON.parse(fs.readFileSync(FILE, 'utf-8'));
-  return NextResponse.json(vendors);
+  return NextResponse.json(db.vendors.getAll());
 }
 
 export async function PATCH(req: NextRequest) {
   const body = await req.json();
-  const vendors: Vendor[] = JSON.parse(fs.readFileSync(FILE, 'utf-8'));
-  const idx = vendors.findIndex(v => v.id === body.id);
-  if (idx === -1) return NextResponse.json({ error: 'Vendor not found' }, { status: 404 });
-  vendors[idx] = { ...vendors[idx], ...body };
-  fs.writeFileSync(FILE, JSON.stringify(vendors, null, 2));
-  return NextResponse.json(vendors[idx]);
+  const updated = db.vendors.update(body.id, body);
+  if (!updated) return NextResponse.json({ error: 'Vendor not found' }, { status: 404 });
+  return NextResponse.json(updated);
 }
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const vendors: Vendor[] = JSON.parse(fs.readFileSync(FILE, 'utf-8'));
+  const all = db.vendors.getAll();
   const v: Vendor = {
     id: `v${Date.now()}`,
     phone: body.phone,
     ownerName: body.ownerName,
     shopName: body.shopName,
-    shopId: `swiq-${String(vendors.length + 1).padStart(3, '0')}`,
+    shopId: `swiq-${String(all.length + 1).padStart(3, '0')}`,
     loginToken: generateVendorToken(),
     isActive: true,
     createdAt: new Date().toISOString(),
     lastLogin: new Date().toISOString(),
   };
-  vendors.push(v);
-  fs.writeFileSync(FILE, JSON.stringify(vendors, null, 2));
+  db.vendors.add(v);
   return NextResponse.json(v, { status: 201 });
 }

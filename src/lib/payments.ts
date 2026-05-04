@@ -1,5 +1,3 @@
-import fs from 'fs';
-import path from 'path';
 import { db } from './db';
 import { Order, PaymentEvent, PaymentInfo, PaymentState } from './types';
 
@@ -36,7 +34,6 @@ export function applyPaymentEvent(args: {
     const events = [...payment.events, event];
     const webhookEventIds = [...payment.webhookEventIds, args.eventId];
 
-    // Determine new state. PAID is terminal except for REFUND_*.
     let nextState: PaymentState = prev.paymentState ?? 'INITIATED';
     const next: PaymentInfo = { ...payment, events, webhookEventIds };
 
@@ -62,7 +59,6 @@ export function applyPaymentEvent(args: {
         }
         break;
       case 'REFUND_INITIATED':
-        // mark intent; final state set by REFUND_SUCCESS
         break;
       case 'REFUND_SUCCESS':
         if (nextState === 'PAID' || nextState === 'SETTLED') {
@@ -82,22 +78,6 @@ export function applyPaymentEvent(args: {
   });
 }
 
-/* ── tiny audit log so failed webhooks are inspectable ── */
-
-const AUDIT_FILE = path.join(process.cwd(), 'data', 'payment_events.json');
-
 export function appendAudit(entry: Record<string, unknown>) {
-  let arr: unknown[] = [];
-  try {
-    if (fs.existsSync(AUDIT_FILE)) {
-      arr = JSON.parse(fs.readFileSync(AUDIT_FILE, 'utf-8'));
-      if (!Array.isArray(arr)) arr = [];
-    }
-  } catch {
-    arr = [];
-  }
-  arr.unshift({ at: new Date().toISOString(), ...entry });
-  // Keep most recent 500 only.
-  if (arr.length > 500) arr = arr.slice(0, 500);
-  fs.writeFileSync(AUDIT_FILE, JSON.stringify(arr, null, 2));
+  db.appendAudit(entry);
 }

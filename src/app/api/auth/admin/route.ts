@@ -1,14 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-
-const CONFIG = path.join(process.cwd(), 'data', 'admin-config.json');
-
-interface Config { adminPhone: string; adminName: string; adminToken: string; demoOtp: string; }
+import { db } from '@/lib/db';
 
 export async function POST(req: NextRequest) {
   const { token } = await req.json();
-  const cfg: Config = JSON.parse(fs.readFileSync(CONFIG, 'utf-8'));
+  const cfg = db.config.admin();
   if (token !== cfg.adminToken) {
     return NextResponse.json({ error: 'Invalid admin token' }, { status: 401 });
   }

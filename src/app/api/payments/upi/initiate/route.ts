@@ -1,18 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
 import { db } from '@/lib/db';
 import { getSetuClient } from '@/lib/setu';
 import { appendAudit } from '@/lib/payments';
 import { PaymentInfo } from '@/lib/types';
-
-const SHOP_FILE = path.join(process.cwd(), 'data', 'shop.json');
-
-interface ShopConfig {
-  name: string;
-  bankAccountId?: string;
-  bankIfsc?: string;
-}
 
 /**
  * POST /api/payments/upi/initiate
@@ -20,9 +10,6 @@ interface ShopConfig {
  *
  * Creates a Setu payment link for the order, stores the platformBillID + upiLink,
  * transitions paymentState to INITIATED, and returns the link to the client.
- *
- * The client never builds the UPI link itself — that way Setu (or the mock)
- * is the single source of truth for what the user pays into.
  */
 export async function POST(req: NextRequest) {
   let body: { orderId?: string };
@@ -56,7 +43,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const shop: ShopConfig = JSON.parse(fs.readFileSync(SHOP_FILE, 'utf-8'));
+  const shop = db.shop.get();
   if (!shop.bankAccountId || !shop.bankIfsc) {
     return NextResponse.json({
       error: 'Vendor bank account not onboarded. Set bankAccountId and bankIfsc on the shop record before accepting UPI payments.',

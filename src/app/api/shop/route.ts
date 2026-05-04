@@ -1,18 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
-
-const FILE = path.join(process.cwd(), 'data', 'shop.json');
+import { db } from '@/lib/db';
 
 export async function GET() {
-  const shop = JSON.parse(fs.readFileSync(FILE, 'utf-8'));
-  return NextResponse.json(shop);
+  return NextResponse.json(db.shop.get());
 }
 
 export async function PATCH(req: NextRequest) {
   const body = await req.json();
-  const shop = JSON.parse(fs.readFileSync(FILE, 'utf-8'));
-  const updated = { ...shop, ...body };
-  fs.writeFileSync(FILE, JSON.stringify(updated, null, 2));
+  const updated = db.shop.set(body);
   return NextResponse.json(updated);
 }
