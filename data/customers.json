@@ -1,0 +1,132 @@
+[
+  {
+    "id": "c1",
+    "name": "Rahul Sharma",
+    "phone": "9876543210",
+    "visitCount": 12,
+    "totalSpent": 1840,
+    "lastVisit": "2026-05-04T12:30:00.000Z",
+    "isRepeat": true,
+    "notified": true
+  },
+  {
+    "id": "c2",
+    "name": "Priya Singh",
+    "phone": "9812345678",
+    "visitCount": 8,
+    "totalSpent": 1320,
+    "lastVisit": "2026-05-04T14:00:00.000Z",
+    "isRepeat": true,
+    "notified": true
+  },
+  {
+    "id": "c3",
+    "name": "Amit Kumar",
+    "phone": "9988776655",
+    "visitCount": 6,
+    "totalSpent": 980,
+    "lastVisit": "2026-05-04T08:00:00.000Z",
+    "isRepeat": true,
+    "notified": true
+  },
+  {
+    "id": "c4",
+    "name": "Sunita Devi",
+    "phone": "9871234560",
+    "visitCount": 3,
+    "totalSpent": 420,
+    "lastVisit": "2026-05-04T08:30:00.000Z",
+    "isRepeat": false,
+    "notified": false
+  },
+  {
+    "id": "c5",
+    "name": "Deepak Verma",
+    "phone": "9765432100",
+    "visitCount": 5,
+    "totalSpent": 860,
+    "lastVisit": "2026-05-04T14:05:00.000Z",
+    "isRepeat": true,
+    "notified": true
+  },
+  {
+    "id": "c6",
+    "name": "Kavya Nair",
+    "phone": "9844567890",
+    "visitCount": 2,
+    "totalSpent": 200,
+    "lastVisit": "2026-05-04T10:00:00.000Z",
+    "isRepeat": false,
+    "notified": false
+  },
+  {
+    "id": "c7",
+    "name": "Rohit Mehta",
+    "phone": "9654321098",
+    "visitCount": 4,
+    "totalSpent": 720,
+    "lastVisit": "2026-05-04T11:00:00.000Z",
+    "isRepeat": false,
+    "notified": false
+  },
+  {
+    "id": "c8",
+    "name": "Anita Joshi",
+    "phone": "9733210987",
+    "visitCount": 7,
+    "totalSpent": 1100,
+    "lastVisit": "2026-05-04T11:30:00.000Z",
+    "isRepeat": true,
+    "notified": true
+  },
+  {
+    "id": "c9",
+    "name": "Vikram Patel",
+    "phone": "9622109876",
+    "visitCount": 3,
+    "totalSpent": 380,
+    "lastVisit": "2026-05-04T12:00:00.000Z",
+    "isRepeat": false,
+    "notified": false
+  },
+  {
+    "id": "c10",
+    "name": "Meena Gupta",
+    "phone": "9511098765",
+    "visitCount": 9,
+    "totalSpent": 1560,
+    "lastVisit": "2026-05-04T13:00:00.000Z",
+    "isRepeat": true,
+    "notified": true
+  },
+  {
+    "id": "c11",
+    "name": "Sanjay Rao",
+    "phone": "9400987654",
+    "visitCount": 5,
+    "totalSpent": 980,
+    "lastVisit": "2026-05-04T13:30:00.000Z",
+    "isRepeat": true,
+    "notified": true
+  },
+  {
+    "id": "c12",
+    "name": "New Customer",
+    "phone": "9300123456",
+    "visitCount": 1,
+    "totalSpent": 80,
+    "lastVisit": "2026-05-04T14:10:00.000Z",
+    "isRepeat": false,
+    "notified": false
+  },
+  {
+    "id": "c1777840903036",
+    "name": "vaidik",
+    "phone": "7905202797",
+    "visitCount": 4,
+    "totalSpent": 320,
+    "lastVisit": "2026-05-04T19:54:41.612Z",
+    "isRepeat": true,
+    "notified": false
+  }
+]

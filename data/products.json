@@ -1,0 +1,15 @@
+[
+  {"id":"p1","name":"Chole Bhature","price":80,"category":"Main Course"},
+  {"id":"p2","name":"Pav Bhaji","price":60,"category":"Main Course"},
+  {"id":"p3","name":"Dosa","price":70,"category":"South Indian"},
+  {"id":"p4","name":"Idli Sambhar","price":50,"category":"South Indian"},
+  {"id":"p5","name":"Biryani","price":150,"category":"Main Course"},
+  {"id":"p6","name":"Samosa","price":25,"category":"Snacks"},
+  {"id":"p7","name":"Burger","price":90,"category":"Fast Food"},
+  {"id":"p8","name":"Chai","price":20,"category":"Beverages"},
+  {"id":"p9","name":"Lassi","price":40,"category":"Beverages"},
+  {"id":"p10","name":"Cold Drink","price":30,"category":"Beverages"},
+  {"id":"p11","name":"Raita","price":30,"category":"Sides"},
+  {"id":"p12","name":"Fries","price":50,"category":"Fast Food"},
+  {"id":"p13","name":"Filter Coffee","price":30,"category":"Beverages"}
+]

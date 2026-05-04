@@ -1,0 +1,17 @@
+{
+  "id": "swiq-001",
+  "name": "Tealogy",
+  "tagline": "Tea with Tech",
+  "phone": "9876543210",
+  "address": "Shop No. 12, MG Road, Near Gandhi Circle, Bangalore",
+  "hours": "7:00 AM – 10:00 PM",
+  "isOpen": true,
+  "upiId": "7905202797@upi",
+  "minOrder": 50,
+  "deliveryTime": "15–20 min",
+  "category": "North Indian  · Fast Food",
+  "rating": "4.8",
+  "totalRatings": 240,
+  "banner": null,
+  "logo": null
+}

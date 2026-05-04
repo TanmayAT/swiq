@@ -1,0 +1,17 @@
+[
+  {"id":"m1","name":"Chole Bhature","price":80,"category":"Main Course","description":"Crispy golden bhature with spicy punjabi chole","available":true,"popular":true},
+  {"id":"m2","name":"Pav Bhaji","price":60,"category":"Main Course","description":"Buttery pav with rich Mumbai-style bhaji","available":true,"popular":true},
+  {"id":"m3","name":"Dosa","price":70,"category":"South Indian","description":"Crispy golden dosa with coconut chutney & sambhar","available":true,"popular":false},
+  {"id":"m4","name":"Idli Sambhar","price":50,"category":"South Indian","description":"Soft steamed idli with hot sambhar, 2 pieces","available":true,"popular":false},
+  {"id":"m5","name":"Biryani","price":150,"category":"Main Course","description":"Fragrant basmati rice with aromatic spices","available":true,"popular":true},
+  {"id":"m6","name":"Samosa","price":25,"category":"Snacks","description":"Crispy fried samosa with spiced potato filling, 2 pcs","available":true,"popular":true},
+  {"id":"m7","name":"Burger","price":90,"category":"Fast Food","description":"Juicy veg patty with cheese, veggies in a soft bun","available":true,"popular":false},
+  {"id":"m8","name":"Chai","price":20,"category":"Beverages","description":"Freshly brewed ginger chai","available":true,"popular":false},
+  {"id":"m9","name":"Lassi","price":40,"category":"Beverages","description":"Thick chilled sweet lassi","available":true,"popular":false},
+  {"id":"m10","name":"Cold Drink","price":30,"category":"Beverages","description":"Chilled soft drink of your choice","available":true,"popular":false},
+  {"id":"m11","name":"Raita","price":30,"category":"Sides","description":"Cool cucumber raita","available":true,"popular":false},
+  {"id":"m12","name":"Fries","price":50,"category":"Fast Food","description":"Crispy golden salted fries","available":true,"popular":false},
+  {"id":"m13","name":"Filter Coffee","price":30,"category":"Beverages","description":"Strong south Indian filter coffee","available":true,"popular":false},
+  {"id":"m14","name":"Paneer Butter Masala","price":140,"category":"Main Course","description":"Soft paneer cubes in rich creamy tomato gravy","available":true,"popular":true},
+  {"id":"m15","name":"Vada Pav","price":30,"category":"Snacks","description":"Mumbai's favourite street food with green chutney","available":true,"popular":true}
+]
